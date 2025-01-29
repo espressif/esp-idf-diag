@@ -1,13 +1,12 @@
 name: PyPI release
 
 on:
-  push:
-    branches:
-      - master
+  release:
+    types: [released]
 
 jobs:
   build_and_upload:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v2

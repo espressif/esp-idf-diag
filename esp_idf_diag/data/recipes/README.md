@@ -1,6 +1,6 @@
-# Recipe format description for idf.py diag
+# Recipe format description for esp-idf-diag
 
-The `idf.py diag` command processes one or more `recipe` files. Each `recipe`
+The `esp-idf-diag` command processes one or more `recipe` files. Each `recipe`
 file outlines a collection of related data and files that should be gathered.
 For instance, the `idf.yml` recipe gathers information related to the ESP-IDF.
 `Recipes` are formatted in YAML. The output from each `recipe` consists of a
@@ -32,18 +32,19 @@ this directory for examples.
 
 ## Recipe variables
 
-The `recipe` can utilize the following variables. The `idf.py diag` assigns
+The `recipe` can utilize the following variables. The `esp-idf-diag` assigns
 values to these variables and expands them in the recipe upon loading. To use a
 variable, format it as `${NAME}`, such as `${IDF_PATH}`.
 
 * PROJECT_DIR
 
-    Project directory specified by idf.py using the `-C` or `--project-dir`
-    option.
+    The project directory as specified by the `--project-dir` option, or
+    defaults to the current working directory if not specified.
 
 * BUILD_DIR
 
-    Build directory specified by idf.py using the `-B` or `--build-dir` option.
+    The build directory as specified by the `--build-dir` option, or it
+    defaults to `PROJECT_DIR/build`.
 
 * IDF_PATH
 
@@ -52,7 +53,7 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
 * REPORT_DIR
 
     The report directory is where all the recipe outputs are stored. Keep in
-    mind that during the execution of `idf.py diag`, it points to a temporary
+    mind that during the execution of `esp-idf-diag`, it points to a temporary
     directory, which is moved to its final destination once the report is
     successfully completed.
 
@@ -60,12 +61,12 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
 
 * description: string (required)
 
-    Short `recipe` description, which is shown in `idf.py diag` progress.
+    Short `recipe` description, which is shown in `esp-idf-diag` progress.
 
 * tags: list (optional)
 
     Strings which identify this `recipe`. Used to specify which `recipes`
-    should the `idf.py diag` use. All `recipes` with a given tag are used.
+    should the `esp-idf-diag` use. All `recipes` with a given tag are used.
 
 * output: string (optional)
 
@@ -87,7 +88,7 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
 
 * name: string (required)
 
-    Brief description of the `step`, displayed in the `idf.py diag` progress
+    Brief description of the `step`, displayed in the `esp-idf-diag` progress
     beneath the `recipe` description.
 
 * system: string (optional)
@@ -101,7 +102,7 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
     directory for all files produced by this `step` within the recipe `output`
     directory.  For instance, if it is set to `logs` and the report directory
     is `report` and recipe `output` is `idf`, then all files collected by this
-    `step` will be stored in the `report/idf/logs` directory. 
+    `step` will be stored in the `report/idf/logs` directory.
 
 * cmds: list (required)
 
@@ -112,7 +113,7 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
 The following commands can be used within a `step` in the `recipe`.  Each
 command consists of a list that includes the command name, such as `exec` or
 `glob`, along with its arguments. Please be aware that if a command fails, it
-does not terminate `idf.py diag`; all commands will still be executed.  The
+does not terminate `esp-idf-diag`; all commands will still be executed.  The
 command mapping key has no value, and if it is present, it is ignored.
 
 ### file
