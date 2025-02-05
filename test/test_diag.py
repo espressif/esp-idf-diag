@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
+import getpass
 import logging
 import os
 import sys
@@ -72,7 +73,12 @@ def test_idf_diag() -> None:
     logging.info('check redaction')
     idf_component_path = app_path / 'idf_component.yml'
     idf_component_path.write_text(
-        'https://username:password@github.com/username/repository.git'
+        (
+            'https://username:password@github.com/username/repository.git\n'
+            'MAC EUI-48 00:1A:2B:3C:4D:5E\n'
+            'MAC EUI-64 00-1A-2B-FF-FE-3C-4D-5E\n'
+            f'USERNAME {getpass.getuser()}\n'
+        )
     )
     run_diag('create', '--force', '--output', report_path, cwd=app_path)
     idf_component_path.unlink()
@@ -80,4 +86,7 @@ def test_idf_diag() -> None:
         report_path / 'manager' / 'idf_component' / 'idf_component.yml', 'r'
     ) as f:
         data = f.read()
-        assert 'https://[REDACTED]@github.com/username/repository.git' in data
+        assert 'https://[XXX]@github.com/username/repository.git' in data
+        assert 'MAC EUI-48 [XXX]' in data
+        assert 'MAC EUI-64 [XXX]' in data
+        assert 'USERNAME [XXX]' in data
