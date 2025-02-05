@@ -3,6 +3,7 @@
 import argparse
 import atexit
 import difflib
+import getpass
 import os
 import platform
 import re
@@ -307,6 +308,8 @@ def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
         with open(dir1_file_path, 'r') as f1, open(dir2_file_path, 'w') as f2:
             data = f1.read()
             for regex, repl in regexes:
+                if not regex:
+                    continue
                 data = regex.sub(repl, data)
             f2.write(data)
 
@@ -1066,6 +1069,37 @@ def process_recipe(recipe: Dict) -> None:
                 err(f'Unknow command "{cmd}" in step "{step_name}"')
 
 
+def get_purge(args: Namespace) -> list:
+    """Load and return a dictionary for purge."""
+
+    purge: list = []
+
+    dbg(f'Purge file: {args.purge}')
+
+    def get_username() -> str:
+        username = ''
+        try:
+            username = getpass.getuser()
+        except Exception:
+            dbg('Unable to retrieve the username using getpass.getuser')
+
+        return username
+
+    variables = {
+        'USERNAME': get_username(),
+    }
+
+    try:
+        with open(args.purge, 'r') as f:
+            data = f.read()
+            formatted = Template(data).safe_substitute(**variables)
+            purge = yaml.safe_load(formatted)
+    except Exception:
+        die(f'Cannot load purge file "{args.purge}"')
+
+    return purge
+
+
 def get_recipes(args: Namespace) -> Dict:
     """Load and return a dictionary of recipes.
 
@@ -1330,13 +1364,11 @@ def cmd_create(args: Namespace) -> int:
     except Exception:
         die(f'File "{recipe_file}" is not a valid diagnostic file')
 
-    # Load purge file
-    dbg(f'Purge file: {args.purge}')
+    # Get purge file
     try:
-        with open(args.purge, 'r') as f:
-            purge = yaml.safe_load(f.read())
+        purge = get_purge(args)
     except Exception:
-        die(f'Cannot load purge file "{args.purge}"')
+        die(f'Unable to create purge for "{args.purge}"')
 
     # Validate purge file
     try:

@@ -1,3 +1,9 @@
 # Remove user, password, token from URL
 - regex: '://[^@]+@'
-  repl: '://[REDACTED]@'
+  repl: '://[XXX]@'
+# Remove MAC address EUI-48 and EUI-64
+- regex: '(?:[0-9A-Fa-f]{2}[-:]){5,7}[0-9A-Fa-f]{2}'
+  repl: '[XXX]'
+# Remove username
+- regex: '${USERNAME}'
+  repl: '[XXX]'
