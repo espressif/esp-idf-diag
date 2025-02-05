@@ -1,7 +1,6 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 ---
-minimum_pre_commit_version: 3.3.0
 default_install_hook_types: [pre-commit,commit-msg]
 
 repos:
@@ -15,26 +14,32 @@ repos:
         args: ['-f=lf']
       - id: double-quote-string-fixer
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.14
     hooks:
-      - id: flake8
-        args: ['--config=.flake8']
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.11.5
-    hooks:
-      - id: isort
-        name: isort (python)
+      - id: ruff # Runs ruff linter (replaces flake8)
+        args: [--fix, --exit-non-zero-on-fix] # --fix for fixing errors
+      - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 'v1.1.1'  # Use the sha / tag you want to point at
+    rev: 'v1.4.1'
     hooks:
     -   id: mypy
-        additional_dependencies: []
+        additional_dependencies: [types-PyYAML]
 
   - repo: https://github.com/espressif/conventional-precommit-linter
     rev: v1.2.0
     hooks:
       - id: conventional-precommit-linter
         stages: [commit-msg]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.5
+    hooks:
+      - id: codespell
+
+  - repo: https://github.com/espressif/check-copyright/
+    rev: v1.1.0
+    hooks:
+      - id: check-copyright
+        args: ['--config', 'check_copyright_config.yaml']
