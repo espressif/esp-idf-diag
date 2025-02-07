@@ -1,3 +1,10 @@
+## v0.1.1 (2025-02-07)
+
+### 🐛 Bug Fixes
+
+- **ci**: use setuptools to get current package version *(Frantisek Hrbata - 2b868b9)*
+
+
 ## v0.1.0 (2025-02-06)
 
 ### ✨ New Features
