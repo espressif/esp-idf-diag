@@ -54,10 +54,12 @@ LOG_FILE = None
 LOG_FILE_PATH = TMP_DIR_PATH / 'diag.log'
 
 # Fixed path for the built-in recipes
-BUILTIN_RECIPES_PATH = Path(__file__).parent / 'data' / 'recipes'
+BUILTIN_RECIPES_PATH = (Path(__file__).parent / 'data' / 'recipes').resolve()
 
 # Fixed path for the built-in purge
-BUILTIN_PURGE_PATH = Path(__file__).parent / 'data' / 'purge' / 'purge.yml'
+BUILTIN_PURGE_PATH = (
+    Path(__file__).parent / 'data' / 'purge' / 'purge.yml'
+).resolve()
 
 
 def cleanup() -> None:
