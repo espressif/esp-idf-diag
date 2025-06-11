@@ -1482,8 +1482,7 @@ def main() -> int:
             help=(
                 'Consider only recipes containing TAG. This option can be '
                 'specified multiple times. By default, all recipes are '
-                'used. Use -l/--list-recipes '
-                'option to see recipe TAG information.'
+                'used. Use the list command to see recipe TAG information.'
             ),
         )
         parser.add_argument(
