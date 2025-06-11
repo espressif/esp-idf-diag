@@ -57,6 +57,11 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
     directory, which is moved to its final destination once the report is
     successfully completed.
 
+* PORT
+
+    Device serial port. This variable might not be set if the serial port is
+    not available. Use this in conjunction with setting `port: True` in step.
+
 ## Recipe
 
 * description: string (required)
@@ -92,9 +97,15 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
     beneath the `recipe` description.
 
 * system: string (optional)
+
     Can be used to restrict the operating system on which the step will be
     executed. It should be Linux, Darwin, or Windows. If specified, the step
     will only run on the designated system.
+
+* port: boolean (optional)
+
+    If true, the step will only be carried out if the device's serial port is
+    available. The serial port value is set in the `PORT` recipe variable.
 
 * output: string (optional)
 
