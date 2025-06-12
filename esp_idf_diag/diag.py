@@ -875,11 +875,11 @@ def cmd_exec(args: Dict, step: Dict, recipe: Dict) -> None:
             timeout=timeout,
         )
     except Exception:
-        err(f'Exec command "{cmd}" failed')
+        warn(f'Exec command "{cmd}" failed')
         return
 
     if p.returncode:
-        err(f'Exec command "{cmd}" failed with exit code {p.returncode}')
+        warn(f'Exec command "{cmd}" failed with exit code {p.returncode}')
         if p.stderr:
             dbg(f'stderr: "{p.stderr}"')
 
