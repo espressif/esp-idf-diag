@@ -4,4 +4,4 @@
 """Tool for gathering diagnostic information to assist in resolving issues
 with ESP-IDF projects."""
 
-__version__ = '0.1.1'
+__version__ = '0.2.0'

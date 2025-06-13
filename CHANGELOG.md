@@ -1,3 +1,17 @@
+## v0.2.0 (2025-06-13)
+
+### ✨ New Features
+
+- add a recipe for collecting information about the target chip *(Frantisek Hrbata - 79db5bb)*
+- allow recipes to use the target serial port *(Frantisek Hrbata - 15054be)*
+
+### 🐛 Bug Fixes
+
+- do not report a failed exec command as an error *(Frantisek Hrbata - 6ccfcd7)*
+- update the description of the --tag option for the create command *(Frantisek Hrbata - 561740b)*
+- display correctly built-in recipes information in the list command *(Frantisek Hrbata - 4f10fec)*
+
+
 ## v0.1.1 (2025-02-07)
 
 ### 🐛 Bug Fixes
