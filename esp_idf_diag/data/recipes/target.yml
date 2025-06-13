@@ -1,0 +1,31 @@
+description: Target information
+tags: [target]
+output: target
+steps:
+  - name: 'Esptool - flash_id'
+    port: true
+    output: esptool
+    cmds:
+      - exec:
+        cmd: 'esptool.py --port ${PORT} flash_id'
+        timeout: 10
+        output: flash_id
+        stderr: flash_id.err
+  - name: 'Esptool - get_security_info'
+    port: true
+    output: esptool
+    cmds:
+      - exec:
+        cmd: 'esptool.py --port ${PORT} get_security_info'
+        timeout: 10
+        output: get_security_info
+        stderr: get_security_info.err
+  - name: 'Espefuse - summary'
+    port: true
+    output: espefuse
+    cmds:
+      - exec:
+        cmd: 'espefuse.py --port ${PORT} summary'
+        timeout: 10
+        output: summary
+        stderr: summary.err
