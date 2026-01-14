@@ -1453,6 +1453,7 @@ def cmd_create(args: Namespace) -> int:
     dbg('Report is done.')
 
     try:
+        TMP_DIR_REPORT_PATH.mkdir(parents=True, exist_ok=True)
         shutil.copy(LOG_FILE_PATH, TMP_DIR_REPORT_PATH / 'diag.log')
     except Exception:
         err('Cannot copy the log file to the report directory')
