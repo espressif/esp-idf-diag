@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import argparse
 import atexit
@@ -273,17 +273,24 @@ def diff_dirs(dir1: Path, dir2: Path) -> None:
         )
 
         with open(dir1_file_path, 'r') as f1, open(dir2_file_path, 'r') as f2:
-            diff = difflib.unified_diff(
-                f1.readlines(),
-                f2.readlines(),
-                fromfile=str(
-                    dir1_file_path.relative_to(dir1_root_path.parent)
-                ),
-                tofile=str(dir2_file_path.relative_to(dir2_root_path.parent)),
-                n=0,
-            )
-            for line in diff:
-                dbg(line.strip())
+            try:
+                f1_lines = f1.readlines()
+            except UnicodeDecodeError:
+                dbg(f'skipping redaction diff for {dir1_file_path}')
+            else:
+                diff = difflib.unified_diff(
+                    f1_lines,
+                    f2.readlines(),
+                    fromfile=str(
+                        dir1_file_path.relative_to(dir1_root_path.parent)
+                    ),
+                    tofile=str(
+                        dir2_file_path.relative_to(dir2_root_path.parent)
+                    ),
+                    n=0,
+                )
+                for line in diff:
+                    dbg(line.strip())
 
 
 def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
@@ -308,12 +315,17 @@ def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
         dir2_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(dir1_file_path, 'r') as f1, open(dir2_file_path, 'w') as f2:
-            data = f1.read()
-            for regex, repl in regexes:
-                if not regex:
-                    continue
-                data = regex.sub(repl, data)
-            f2.write(data)
+            try:
+                data = f1.read()
+            except UnicodeDecodeError:
+                shutil.copy(dir1_file_path, dir2_file_path)
+                warn(f'skipping redaction for {dir1_file_path}')
+            else:
+                for regex, repl in regexes:
+                    if not regex:
+                        continue
+                    data = regex.sub(repl, data)
+                f2.write(data)
 
     diff_dirs(dir1, dir2)
 
