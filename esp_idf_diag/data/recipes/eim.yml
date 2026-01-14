@@ -1,0 +1,27 @@
+description: EIM (ESP-IDF Image Manager) logs
+tags: [eim, logs]
+output: eim
+steps:
+  - name: 'EIM Logs - Linux'
+    system: Linux
+    output: logs
+    cmds:
+      - glob:
+        pattern: '*'
+        path: '~/.local/share/eim/logs'
+
+  - name: 'EIM Logs - Darwin'
+    system: Darwin
+    output: logs
+    cmds:
+      - glob:
+        pattern: '*'
+        path: '~/Library/Application Support/eim/logs'
+
+  - name: 'EIM Logs - Windows'
+    system: Windows
+    output: logs
+    cmds:
+      - glob:
+        pattern: '*'
+        path: '~\\AppData\\Local\\eim\\logs'
