@@ -835,7 +835,7 @@ def get_output_path(
 
 def cmd_file(args: Dict, step: Dict, recipe: Dict) -> None:
     """file command"""
-    src = args['path']
+    src = str(Path(args['path']).expanduser())
     dst = args.get('output')
 
     dst_path = get_output_path(src, dst, step, recipe)
@@ -955,7 +955,7 @@ def get_latest_modified_file(file_paths: List[Path]) -> Optional[Path]:
 def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
     """glob command"""
     pattern = args['pattern']
-    dir_path = Path(args['path'])
+    dir_path = Path(args['path']).expanduser()
     output = args.get('output')
     mtime = args.get('mtime', False)
     recursive = args.get('recursive', False)

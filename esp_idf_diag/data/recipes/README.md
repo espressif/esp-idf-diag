@@ -62,6 +62,12 @@ variable, format it as `${NAME}`, such as `${IDF_PATH}`.
     Device serial port. This variable might not be set if the serial port is
     not available. Use this in conjunction with setting `port: True` in step.
 
+* \~
+
+   The tilde symbol is expanded to the user's home directory in the `path`
+   command argument. This can be used to collect files from the user's home
+   directory if needed.
+
 ## Recipe
 
 * description: string (required)
