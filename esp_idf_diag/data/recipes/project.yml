@@ -40,6 +40,10 @@ steps:
     cmds:
       - file:
         path: '${PROJECT_DIR}/sdkconfig'
+      - exec:
+        cmd: 'idf.py config-report'
+      - file:
+        path: '${BUILD_DIR}/config/kconfig_parse_report.json'
 
   - name: 'Logs'
     output: 'logs'
