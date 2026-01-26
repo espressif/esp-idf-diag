@@ -4,6 +4,7 @@ import argparse
 import atexit
 import difflib
 import getpass
+import json
 import os
 import platform
 import re
@@ -1166,6 +1167,7 @@ def get_recipes(args: Namespace) -> Dict:
 
     project_dir = str(Path(args.project_dir).expanduser())
     build_dir = str(Path(args.build_dir).expanduser())
+    sdkconfig_file = os.path.join(project_dir, 'sdkconfig')
 
     if (
         not (Path(build_dir) / 'project_description.json').is_file()
@@ -1179,6 +1181,20 @@ def get_recipes(args: Namespace) -> Dict:
             )
         )
         hint('You can use the "--build-dir" option to set it.')
+    else:
+        try:
+            with open(Path(build_dir) / 'project_description.json') as f:
+                project_description = json.load(f)
+                sdkconfig_file = project_description.get(
+                    'config_file', sdkconfig_file
+                )
+        except Exception:
+            warn(
+                (
+                    'Obtaining SDKCONFIG file from project description failed.'
+                    f' Using default SDKCONFIG file path: "{sdkconfig_file}".'
+                )
+            )
 
     # Set up variables that can be utilized in the recipe.
     variables = {
@@ -1186,6 +1202,7 @@ def get_recipes(args: Namespace) -> Dict:
         'BUILD_DIR': build_dir,
         'IDF_PATH': os.environ['IDF_PATH'],
         'REPORT_DIR': str(TMP_DIR_REPORT_PATH),
+        'SDKCONFIG_FILE': sdkconfig_file,
     }
     if args.port:
         variables['PORT'] = args.port

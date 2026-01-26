@@ -39,7 +39,7 @@ steps:
   - name: 'Sdkconfig'
     cmds:
       - file:
-        path: '${PROJECT_DIR}/sdkconfig'
+        path: '${SDKCONFIG_FILE}'
       - exec:
         cmd: 'idf.py config-report'
       - file:
