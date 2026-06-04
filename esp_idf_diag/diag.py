@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
-import argparse
-import atexit
 import difflib
 import getpass
 import json
@@ -10,49 +8,25 @@ import platform
 import re
 import shutil
 import sys
-import textwrap
-import traceback
 import uuid
 import zipfile
-from argparse import Namespace
 from pathlib import Path
 from string import Template
 from subprocess import run
-from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional
 
+import rich_click as click
 import yaml
-from rich.console import Console
+from esp_pylib.cli_types import SerialPortType
+from esp_pylib.constants import ESP_ROM_BAUD
+from esp_pylib.logger import log
 
-CONSOLE_STDERR = None
-CONSOLE_STDOUT = None
-
-# Logging levels and configurations.
-# stderr
-LOG_FATAL = 1
-LOG_ERROR = 2
-LOG_WARNING = 3
-LOG_INFO = 4
-LOG_DEBUG = 5
-# stdout
-LOG_STDOUT = 6
-LOG_HINT = 7
-
-LOG_LEVEL = LOG_INFO
-LOG_PREFIX = False
-LOG_HINTS = True
-
-# A temporary directory is used to store the report. Once it is completely
-# generated, it is moved to its final location.
-TMP_DIR = TemporaryDirectory()
-TMP_DIR_PATH = Path(TMP_DIR.name)
-TMP_DIR_REPORT_PATH = TMP_DIR_PATH / 'report'
-TMP_DIR_REPORT_REDACTED_PATH = TMP_DIR_PATH / 'redacted'
-
-# The full debug log will be stored in the report directory alongside other
-# collected files.
-LOG_FILE = None
-LOG_FILE_PATH = TMP_DIR_PATH / 'diag.log'
+from esp_idf_diag.log import (
+    LOG_FILE_PATH,
+    TMP_DIR_REPORT_PATH,
+    TMP_DIR_REPORT_REDACTED_PATH,
+    setup_logger,
+)
 
 # Fixed path for the built-in recipes
 BUILTIN_RECIPES_PATH = (Path(__file__).parent / 'data' / 'recipes').resolve()
@@ -63,209 +37,11 @@ BUILTIN_PURGE_PATH = (
 ).resolve()
 
 
-def cleanup() -> None:
-    """Perform cleanup operations in case of unexpected termination."""
-    try:
-        if LOG_FILE:
-            LOG_FILE.close()
-        shutil.rmtree(TMP_DIR_PATH)
-    except Exception:
-        pass
-
-
-atexit.register(cleanup)
-
-
-def exception_tb() -> Optional[str]:
-    """Return a string containing the message from the most recent exception,
-    along with its traceback, if available.
-    """
-    ex_type, ex_value, ex_traceback = sys.exc_info()
-    in_exception = ex_type is not None
-    if not in_exception:
-        return None
-    ex_msg = f'exception {ex_type}:'
-    if str(ex_value):
-        ex_msg += f' {ex_value}'
-    tb = ''.join(traceback.format_tb(ex_traceback))
-    ex_msg += '\n' + tb.rstrip()
-    ex_msg = textwrap.indent(ex_msg, prefix='> ')
-    return ex_msg
-
-
-def exception_msg() -> Optional[str]:
-    """Return a string containing the message from the most recent exception,
-    if available.
-    """
-    ex_type, ex_value, ex_traceback = sys.exc_info()
-    in_exception = ex_type is not None
-    if not in_exception or not str(ex_value):
-        return None
-    return str(ex_value)
-
-
-def log(
-    level: int, msg: str, prefix: str, no_prefix: bool = False, **kwargs: Any
-) -> None:
-    """Logs a message with a specified severity level and prefix.
-
-    This function outputs log messages to standard error (stderr) based on the
-    provided severity level. All messages are also saved to a log file, which
-    is part of the diagnostic report. The log file entries include a severity
-    prefix but do not contain any color formatting.
-
-    Parameters:
-    level (int): The severity level of the log message.
-    msg (str): The message to be logged.
-    prefix (str): A character prefix to indicate the log severity.
-    no_prefix (bool): Do not add a prefix, even if requested globally. It can
-                      be used for line continuation.
-    kwargs (Any): Passed to the rich print function.
-
-    Returns:
-    None
-    """
-    global LOG_FILE
-    if LOG_PREFIX and not no_prefix:
-        log_prefix = f'{prefix} '
-    else:
-        log_prefix = ''
-
-    if LOG_FILE:
-        try:
-            log_msg = textwrap.indent(msg, prefix=f'{prefix} ')
-            LOG_FILE.write(log_msg + '\n')
-            LOG_FILE.flush()
-        except Exception:
-            LOG_FILE.close()
-            LOG_FILE = None
-            err(
-                (
-                    f'Cannot write to log file "{LOG_FILE}". '
-                    f'Logging to file is turned off.'
-                )
-            )
-
-    msg = textwrap.indent(msg, prefix=log_prefix)
-
-    color = {
-        LOG_FATAL: '[red1]',
-        LOG_ERROR: '[red]',
-        LOG_WARNING: '[yellow]',
-        LOG_INFO: '[steel_blue1]',
-        LOG_DEBUG: '[grey46]',
-        LOG_HINT: '[orange3]',
-        LOG_STDOUT: '',
-    }[level]
-    msg = f'{color}{msg}'
-
-    if level >= LOG_STDOUT:
-        assert CONSOLE_STDOUT  # help mypy
-        CONSOLE_STDOUT.print(msg, **kwargs)
-        sys.stdout.flush()
-    elif level <= LOG_LEVEL:
-        assert CONSOLE_STDERR  # help mypy
-        CONSOLE_STDERR.print(msg, **kwargs)
-        sys.stderr.flush()
-
-
-def die(msg: str, show_hint: bool = True) -> None:
-    """Irrecoverable fatal error."""
-    fatal(msg)
-    # Avoid calling fatal, as it may print the exception again if present.
-    log(LOG_FATAL, 'ESP-IDF diagnostic command failed.', 'F')
-    if show_hint and LOG_LEVEL != LOG_DEBUG:
-        # If the log level for stderr is not set to debug, suggest it.
-        hint('Using the "-d/--debug" option may provide more information.')
-    sys.exit(128)
-
-
-def log_with_exception(level: int, msg: str, prefix: str) -> None:
-    ex_msg = exception_msg()
-    if ex_msg:
-        msg += f': {ex_msg}'
-    log(level, msg, prefix)
-    ex_tb = exception_tb()
-    if ex_tb:
-        log(LOG_DEBUG, ex_tb, 'D')
-
-
-def fatal(msg: str) -> None:
-    log_with_exception(LOG_FATAL, 'fatal: ' + msg, 'F')
-
-
-def err(msg: str) -> None:
-    log_with_exception(LOG_ERROR, 'error: ' + msg, 'E')
-
-
-def warn(msg: str) -> None:
-    log_with_exception(LOG_WARNING, 'warning: ' + msg, 'W')
-
-
-def info(msg: str) -> None:
-    log_with_exception(LOG_INFO, msg, 'I')
-
-
-def dbg(msg: str) -> None:
-    log_with_exception(LOG_DEBUG, msg, 'D')
-
-
-def oprint(msg: str, **kwargs: Any) -> None:
-    log(LOG_STDOUT, msg, 'O', **kwargs)
-
-
-def hint(msg: str) -> None:
-    if LOG_HINTS:
-        log(LOG_HINT, msg, 'H')
-
-
-def set_logger(args: Namespace) -> None:
-    global LOG_LEVEL
-    global LOG_FILE
-    global LOG_PREFIX
-    global LOG_HINTS
-    global CONSOLE_STDOUT
-    global CONSOLE_STDERR
-
-    if args.debug:
-        LOG_LEVEL = LOG_DEBUG
-    elif args.no_hints:
-        LOG_LEVEL = LOG_INFO
-
-    if args.log_prefix:
-        LOG_PREFIX = True
-
-    LOG_HINTS = not args.no_hints
-
-    CONSOLE_STDOUT = Console(
-        no_color=args.no_color,
-        force_terminal=args.force_terminal,
-        soft_wrap=True,
-    )
-    CONSOLE_STDERR = Console(
-        stderr=True,
-        no_color=args.no_color,
-        force_terminal=args.force_terminal,
-        soft_wrap=True,
-    )
-
-    try:
-        LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LOG_FILE = open(LOG_FILE_PATH, 'w')
-    except Exception:
-        err(
-            (
-                f'Cannot open log file "{LOG_FILE}". '
-                f'Log file will not be generated.'
-            )
-        )
-
-
 def diff_dirs(dir1: Path, dir2: Path) -> None:
     """Show differences in files between two directories."""
     dir1_root_path = Path(dir1).resolve()
     dir2_root_path = Path(dir2).resolve()
-    dbg(f'diff "{dir1_root_path}" to "{dir2_root_path}"')
+    log.dbg(f'diff "{dir1_root_path}" to "{dir2_root_path}"')
     for dir1_file_path in dir1_root_path.rglob('*'):
         if not dir1_file_path.is_file():
             continue
@@ -277,7 +53,7 @@ def diff_dirs(dir1: Path, dir2: Path) -> None:
             try:
                 f1_lines = f1.readlines()
             except UnicodeDecodeError:
-                dbg(f'skipping redaction diff for {dir1_file_path}')
+                log.dbg(f'skipping redaction diff for {dir1_file_path}')
             else:
                 diff = difflib.unified_diff(
                     f1_lines,
@@ -291,7 +67,7 @@ def diff_dirs(dir1: Path, dir2: Path) -> None:
                     n=0,
                 )
                 for line in diff:
-                    dbg(line.strip())
+                    log.dbg(line.strip())
 
 
 def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
@@ -306,7 +82,7 @@ def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
 
     dir1_root_path = Path(dir1).resolve()
     dir2_root_path = Path(dir2).resolve()
-    dbg(f'redacting files in "{dir1_root_path}" into "{dir2_root_path}"')
+    log.dbg(f'redacting files in "{dir1_root_path}" into "{dir2_root_path}"')
     for dir1_file_path in dir1_root_path.rglob('*'):
         if not dir1_file_path.is_file():
             continue
@@ -320,7 +96,7 @@ def redact_files(dir1: Path, dir2: Path, purge: list) -> None:
                 data = f1.read()
             except UnicodeDecodeError:
                 shutil.copy(dir1_file_path, dir2_file_path)
-                warn(f'skipping redaction for {dir1_file_path}')
+                log.warn(f'skipping redaction for {dir1_file_path}')
             else:
                 for regex, repl in regexes:
                     if not regex:
@@ -857,9 +633,9 @@ def cmd_file(args: Dict, step: Dict, recipe: Dict) -> None:
         dst_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dst_path)
     except FileNotFoundError:
-        warn(f'File "{src}" does not exist')
+        log.warn(f'File "{src}" does not exist')
     except Exception:
-        err(f'Cannot copy file "{src}"')
+        log.err(f'Cannot copy file "{src}"')
 
 
 def cmd_exec(args: Dict, step: Dict, recipe: Dict) -> None:
@@ -888,13 +664,13 @@ def cmd_exec(args: Dict, step: Dict, recipe: Dict) -> None:
             timeout=timeout,
         )
     except Exception:
-        warn(f'Exec command "{cmd}" failed')
+        log.warn(f'Exec command "{cmd}" failed')
         return
 
     if p.returncode:
-        warn(f'Exec command "{cmd}" failed with exit code {p.returncode}')
+        log.warn(f'Exec command "{cmd}" failed with exit code {p.returncode}')
         if p.stderr:
-            dbg(f'stderr: "{p.stderr}"')
+            log.dbg(f'stderr: "{p.stderr}"')
 
     if stdout and p.stdout:
         try:
@@ -902,7 +678,7 @@ def cmd_exec(args: Dict, step: Dict, recipe: Dict) -> None:
             with open(stdout_path, 'a' if append else 'w') as f:
                 f.write(p.stdout)
         except Exception:
-            err(f'Cannot write exec command "{cmd}" stdout to "{stdout}"')
+            log.err(f'Cannot write exec command "{cmd}" stdout to "{stdout}"')
 
     if stderr and p.stderr:
         try:
@@ -910,7 +686,7 @@ def cmd_exec(args: Dict, step: Dict, recipe: Dict) -> None:
             with open(stderr_path, 'a' if append else 'w') as f:
                 f.write(p.stderr)
         except Exception:
-            err(f'Cannot write exec command "{cmd}" stderr to "{stderr}"')
+            log.err(f'Cannot write exec command "{cmd}" stderr to "{stderr}"')
 
 
 def cmd_env(args: Dict, step: Dict, recipe: Dict) -> None:
@@ -947,7 +723,7 @@ def cmd_env(args: Dict, step: Dict, recipe: Dict) -> None:
             with open(output_path, 'a' if append else 'w') as f:
                 f.write('\n'.join(out_list))
         except Exception:
-            err(f'Cannot write env command output to "{output}"')
+            log.err(f'Cannot write env command output to "{output}"')
 
 
 def get_latest_modified_file(file_paths: List[Path]) -> Optional[Path]:
@@ -981,12 +757,12 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
         else:
             file_paths = list(dir_path.glob(pattern))
     except Exception:
-        err(f'Cannot glob "{pattern}" in "{dir_path}"')
+        log.err(f'Cannot glob "{pattern}" in "{dir_path}"')
         return
 
     file_paths = [file_path for file_path in file_paths if file_path.is_file()]
     if not file_paths:
-        warn(f'No files matching glob "{pattern}" found in "{dir_path}"')
+        log.warn(f'No files matching glob "{pattern}" found in "{dir_path}"')
         return
 
     if regex_str:
@@ -1000,7 +776,7 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
                     if match:
                         file_paths_match.append(file_path)
             except Exception:
-                err(
+                log.err(
                     (
                         f'Failed to search for the regex "{regex_str}" '
                         f'in "{file_path}"'
@@ -1008,7 +784,7 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
                 )
 
         if not file_paths_match:
-            warn(
+            log.warn(
                 (
                     f'No files with content matching regex "{regex_str}" '
                     f'found in "{dir_path}"'
@@ -1020,7 +796,7 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
     if mtime:
         last_modified_file = get_latest_modified_file(file_paths)
         if not last_modified_file:
-            warn(
+            log.warn(
                 (
                     f'No last modified file found for "{pattern}" '
                     f'found in "{dir_path}"'
@@ -1051,7 +827,7 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
                         dst_path.name + f'.{cnt}'
                     )
                     if not new_dst_path.exists():
-                        dbg(
+                        log.dbg(
                             (
                                 f'File "{dst_path.name}" for "{file_path}" '
                                 f'already exists. Using "{new_dst_path.name}"'
@@ -1060,13 +836,13 @@ def cmd_glob(args: Dict, step: Dict, recipe: Dict) -> None:
                         dst_path = new_dst_path
                         break
                     cnt += 1
-            dbg(f'copy "{file_path}" to "{dst_path}"')
+            log.dbg(f'copy "{file_path}" to "{dst_path}"')
             shutil.copy(file_path, dst_path)
         except Exception:
-            err(f'Cannot copy glob file "{file_path}"')
+            log.err(f'Cannot copy glob file "{file_path}"')
 
 
-def process_recipe(recipe: Dict, args: Namespace) -> None:
+def process_recipe(recipe: Dict, args: Dict) -> None:
     """execute commands for every stage in a recipe"""
     for step in recipe['steps']:
         step_name = step['name']
@@ -1074,17 +850,17 @@ def process_recipe(recipe: Dict, args: Namespace) -> None:
         step_port = step.get('port', False)
 
         if step_system and step_system != platform.system():
-            dbg(f'Skipping step "{step_name}" for "{step_system}"')
+            log.dbg(f'Skipping step "{step_name}" for "{step_system}"')
             continue
 
-        if step_port and not args.port:
-            dbg(f'Skipping step "{step_name}" requires device serial port')
+        if step_port and not args.get('port'):
+            log.dbg(f'Skipping step "{step_name}" requires device serial port')
             continue
 
-        dbg(f'Processing step "{step_name}"')
-        oprint(f'* {step_name}')
+        log.dbg(f'Processing step "{step_name}"')
+        log.oprint(f'* {step_name}')
         for cmd in step['cmds']:
-            dbg(f'cmd: "{cmd}"')
+            log.dbg(f'cmd: "{cmd}"')
             if 'file' in cmd:
                 cmd_file(cmd, step, recipe)
             elif 'exec' in cmd:
@@ -1094,22 +870,23 @@ def process_recipe(recipe: Dict, args: Namespace) -> None:
             elif 'glob' in cmd:
                 cmd_glob(cmd, step, recipe)
             else:
-                err(f'Unknow command "{cmd}" in step "{step_name}"')
+                log.err(f'Unknow command "{cmd}" in step "{step_name}"')
 
 
-def get_purge(args: Namespace) -> list:
+def get_purge(args: Dict) -> list:
     """Load and return a dictionary for purge."""
 
     purge: list = []
+    purge_path = args['purge']
 
-    dbg(f'Purge file: {args.purge}')
+    log.dbg(f'Purge file: {purge_path}')
 
     def get_username() -> str:
         username = ''
         try:
             username = getpass.getuser()
         except Exception:
-            dbg('Unable to retrieve the username using getpass.getuser')
+            log.dbg('Unable to retrieve the username using getpass.getuser')
 
         return username
 
@@ -1118,17 +895,17 @@ def get_purge(args: Namespace) -> list:
     }
 
     try:
-        with open(args.purge, 'r') as f:
+        with open(purge_path, 'r') as f:
             data = f.read()
             formatted = Template(data).safe_substitute(**variables)
             purge = yaml.safe_load(formatted)
     except Exception:
-        die(f'Cannot load purge file "{args.purge}"')
+        log.die(f'Cannot load purge file "{purge_path}"')
 
     return purge
 
 
-def get_recipes(args: Namespace) -> Dict:
+def get_recipes(args: Dict) -> Dict:
     """Load and return a dictionary of recipes.
 
     This function retrieves recipes based on the provided command line inputs
@@ -1141,10 +918,10 @@ def get_recipes(args: Namespace) -> Dict:
 
     for recipe_path in BUILTIN_RECIPES_PATH.glob('*.yml'):
         builtin_recipe_files[recipe_path.stem] = str(recipe_path.resolve())
-    dbg(f'Builtin recipes "{builtin_recipe_files}"')
+    log.dbg(f'Builtin recipes "{builtin_recipe_files}"')
 
-    if args.recipe:
-        for recipe_file in args.recipe:
+    if args['recipe']:
+        for recipe_file in args['recipe']:
             recipe_path = Path(recipe_file).resolve()
             if recipe_path.is_file():
                 recipe_files.append(str(recipe_path))
@@ -1154,33 +931,33 @@ def get_recipes(args: Namespace) -> Dict:
                 recipe_files.append(builtin_recipe_files[recipe_file])
                 continue
 
-            die(f'Cannot find recipe "{recipe_file}"')
+            log.die(f'Cannot find recipe "{recipe_file}"')
 
-        if args.append:
+        if args['append']:
             recipe_files += list(builtin_recipe_files.values())
     else:
         recipe_files += list(builtin_recipe_files.values())
 
     recipe_files = list(set(recipe_files))
     recipe_files.sort()
-    dbg(f'Recipe files to use "{recipe_files}"')
+    log.dbg(f'Recipe files to use "{recipe_files}"')
 
-    project_dir = str(Path(args.project_dir).expanduser())
-    build_dir = str(Path(args.build_dir).expanduser())
+    project_dir = str(Path(args['project_dir']).expanduser())
+    build_dir = str(Path(args['build_dir']).expanduser())
     sdkconfig_file = os.path.join(project_dir, 'sdkconfig')
 
     if (
         not (Path(build_dir) / 'project_description.json').is_file()
-        and args.func == cmd_create
+        and args['func'] == cmd_create
     ):
         # Display a warning solely for the create command.
-        warn(
+        log.warn(
             (
                 f'Directory "{build_dir}" does not seem to be '
                 f'an ESP-IDF project build directory.'
             )
         )
-        hint('You can use the "--build-dir" option to set it.')
+        log.hint('You can use the "--build-dir" option to set it.')
     else:
         try:
             with open(Path(build_dir) / 'project_description.json') as f:
@@ -1189,7 +966,7 @@ def get_recipes(args: Namespace) -> Dict:
                     'config_file', sdkconfig_file
                 )
         except Exception:
-            warn(
+            log.warn(
                 (
                     'Obtaining SDKCONFIG file from project description failed.'
                     f' Using default SDKCONFIG file path: "{sdkconfig_file}".'
@@ -1204,18 +981,19 @@ def get_recipes(args: Namespace) -> Dict:
         'REPORT_DIR': str(TMP_DIR_REPORT_PATH),
         'SDKCONFIG_FILE': sdkconfig_file,
     }
-    if args.port:
-        variables['PORT'] = args.port
+    port = args.get('port')
+    if port:
+        variables['PORT'] = port
 
-    dbg(f'Recipe variables: {variables}')
-    dbg(f'Project directory: {project_dir}')
-    dbg(f'Build directory: {build_dir}')
-    dbg(f'System: {platform.system()}')
-    dbg(f'Port: {args.port}')
+    log.dbg(f'Recipe variables: {variables}')
+    log.dbg(f'Project directory: {project_dir}')
+    log.dbg(f'Build directory: {build_dir}')
+    log.dbg(f'System: {platform.system()}')
+    log.dbg(f'Port: {port}')
 
     # Load recipes
     for recipe_file in recipe_files:
-        dbg(f'Loading recipe file "{recipe_file}"')
+        log.dbg(f'Loading recipe file "{recipe_file}"')
         try:
             with open(recipe_file, 'r') as f:
                 data = f.read()
@@ -1223,10 +1001,11 @@ def get_recipes(args: Namespace) -> Dict:
                 recipe = yaml.safe_load(formatted)
                 recipes[recipe_file] = recipe
         except Exception:
-            die(f'Cannot load diagnostic recipe "{recipe_file}"')
+            log.die(f'Cannot load diagnostic recipe "{recipe_file}"')
 
-    if args.tag:
-        dbg('Filtering recipe file with tags "{}"'.format(', '.join(args.tag)))
+    if args['tag']:
+        tags = ', '.join(args['tag'])
+        log.dbg(f'Filtering recipe file with tags "{tags}"')
         recipes_tagged: Dict = {}
         for recipe_file, recipe in recipes.items():
             recipe_tags = recipe.get('tags')
@@ -1234,7 +1013,7 @@ def get_recipes(args: Namespace) -> Dict:
             if not recipe_tags:
                 continue
 
-            for cmdl_tag in args.tag:
+            for cmdl_tag in args['tag']:
                 if cmdl_tag in recipe_tags:
                     recipes_tagged[recipe_file] = recipe
                     break
@@ -1242,19 +1021,17 @@ def get_recipes(args: Namespace) -> Dict:
         recipes = recipes_tagged
 
     if not recipes:
-        die('No recipes available')
+        log.die('No recipes available')
 
     return recipes
 
 
-def cmd_list(args: Namespace) -> int:
+def cmd_list(args: Dict) -> int:
     """Display a list of available recipes along with their details"""
     try:
-        # list command does not have port option
-        args.port = None
         recipes = get_recipes(args)
     except Exception:
-        die('Unable to create list of recipe files')
+        log.die('Unable to create list of recipe files')
 
     rv = 0
 
@@ -1268,58 +1045,56 @@ def cmd_list(args: Namespace) -> int:
             valid = False
             rv = 1
 
-        oprint(recipe_file)
-        oprint('   description: {}'.format(recipe.get('description', '')))
-        oprint(
+        log.oprint(recipe_file)
+        log.oprint('   description: {}'.format(recipe.get('description', '')))
+        log.oprint(
             '   short name: {}'.format(
                 Path(recipe_file).stem if builtin else ''
             )
         )
-        oprint('   valid: {}'.format(valid))
-        oprint('   builtin: {}'.format(builtin))
-        oprint('   tags: {}'.format(', '.join(recipe.get('tags', ''))))
+        log.oprint('   valid: {}'.format(valid))
+        log.oprint('   builtin: {}'.format(builtin))
+        log.oprint('   tags: {}'.format(', '.join(recipe.get('tags', ''))))
 
     return rv
 
 
-def cmd_check(args: Namespace) -> int:
+def cmd_check(args: Dict) -> int:
     """Verify recipes"""
     try:
-        # check command does not have port option
-        args.port = None
         recipes = get_recipes(args)
     except Exception:
-        die('Unable to create list of recipe files')
+        log.die('Unable to create list of recipe files')
 
     error = False
     for recipe_file, recipe in recipes.items():
-        oprint(f'Checking recipe "{recipe_file}" ... ', end='')
+        log.oprint(f'Checking recipe "{recipe_file}" ... ', end='')
         try:
             validate_recipe(recipe)
-            oprint('[green]OK', no_prefix=True)
+            log.oprint('[green]OK', no_prefix=True)
         except Exception:
-            oprint('[red] Failed', no_prefix=True)
-            err('validation failed')
+            log.oprint('[red] Failed', no_prefix=True)
+            log.err('validation failed')
             error = True
 
     if error:
-        err('Recipes validation failed')
+        log.err('Recipes validation failed')
         return 1
 
     return 0
 
 
-def cmd_zip(args: Namespace) -> int:
+def cmd_zip(args: Dict) -> int:
     """Compress the report directory into a zip file"""
-    archive_dir_path = Path(args.directory).expanduser()
-    archive_path = (
-        Path(args.output or args.directory).with_suffix('.zip').expanduser()
-    )
+    directory = args['directory']
+    output = args['output']
+    archive_dir_path = Path(directory).expanduser()
+    archive_path = Path(output or directory).with_suffix('.zip').expanduser()
 
-    info(f'Creating archive "{archive_path}"')
+    log.info(f'Creating archive "{archive_path}"')
 
     if not archive_dir_path.exists() or not archive_dir_path.is_dir():
-        die(
+        log.die(
             (
                 f'The path "{archive_dir_path}" either does not '
                 f'exist or is not a directory.'
@@ -1328,15 +1103,15 @@ def cmd_zip(args: Namespace) -> int:
 
     if archive_path.exists():
         if not archive_path.is_file():
-            die(
+            log.die(
                 (
                     f'Directory entry "{archive_path}" already exists and is '
                     f'not a regular file. Please use the --output option or '
                     f'remove "{archive_path}" manually.'
                 )
             )
-        if not args.force:
-            die(
+        if not args['force']:
+            log.die(
                 (
                     f'Archive file "{archive_path}" already exists. '
                     f'Please use the --output option or --force option to '
@@ -1346,12 +1121,12 @@ def cmd_zip(args: Namespace) -> int:
     try:
         with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as f:
             for file in archive_dir_path.rglob('*'):
-                oprint(f'adding: {file}')
+                log.oprint(f'adding: {file}')
                 f.write(file, file.relative_to(archive_dir_path.parent))
     except Exception:
-        die(f'Cannot create zip archive for "{args.directory}" directory.')
+        log.die(f'Cannot create zip archive for "{directory}" directory.')
 
-    info(
+    log.info(
         (
             f'The archive "{archive_path}" is prepared and can be '
             f'included with your issue report.'
@@ -1363,50 +1138,48 @@ def cmd_zip(args: Namespace) -> int:
 
 def _detect_port() -> Optional[str]:
     port = None
-    info('Searching for device serial port ...')
+    log.info('Searching for device serial port ...')
     try:
         import io
         from contextlib import redirect_stderr, redirect_stdout
 
         import esptool
-        import serial.tools.list_ports
+        from esp_pylib.serial_ports import get_port_names
 
-        ports = list(
-            sorted(p.device for p in serial.tools.list_ports.comports())
-        )
+        ports = get_port_names()
         buffer = io.StringIO()
         with redirect_stdout(buffer), redirect_stderr(buffer):
             esp = esptool.get_default_connected_device(
                 serial_list=ports,
                 port=None,
                 connect_attempts=4,
-                initial_baud=115200,
+                initial_baud=ESP_ROM_BAUD,
             )
-        dbg(f'Port detection: {buffer.getvalue()}')
+        log.dbg(f'Port detection: {buffer.getvalue()}')
         if esp:
             port = esp.serial_port
             esp._port.close()
     except Exception:
-        dbg('Port detection failed')
+        log.dbg('Port detection failed')
 
     return port
 
 
-def cmd_create(args: Namespace) -> int:
+def cmd_create(args: Dict) -> int:
     recipes: Dict = {}
 
-    if not args.output:
+    if not args['output']:
         output_dir_path = Path('diag-{}'.format(uuid.uuid4())).expanduser()
     else:
-        output_dir_path = Path(args.output).expanduser()
+        output_dir_path = Path(args['output']).expanduser()
 
-    info(f'Creating report in "{output_dir_path}" directory.')
+    log.info(f'Creating report in "{output_dir_path}" directory.')
 
-    args.port = args.port or _detect_port()
-    port_str = args.port or 'N/A'
-    info(f'Serial port: {port_str}')
-    if not args.port:
-        warn(
+    args['port'] = args['port'] or _detect_port()
+    port_str = args['port'] or 'N/A'
+    log.info(f'Serial port: {port_str}')
+    if not args['port']:
+        log.warn(
             (
                 'The device serial port is unavailable. '
                 'Target information will not be gathered.'
@@ -1416,11 +1189,11 @@ def cmd_create(args: Namespace) -> int:
     try:
         output_dir_path_exists = output_dir_path.exists()
     except Exception:
-        die(f'Cannot get report directory "{output_dir_path}" status')
+        log.die(f'Cannot get report directory "{output_dir_path}" status')
 
     if output_dir_path_exists:
         if not output_dir_path.is_dir():
-            die(
+            log.die(
                 (
                     f'Directory entry "{output_dir_path}" already exists and '
                     f'is not a directory. Please select a directory that '
@@ -1428,8 +1201,8 @@ def cmd_create(args: Namespace) -> int:
                     f'manually.'
                 )
             )
-        if not args.force:
-            die(
+        if not args['force']:
+            log.die(
                 (
                     f'Report directory "{output_dir_path}" already exists. '
                     f'Please select a directory that does not exist or use '
@@ -1438,72 +1211,75 @@ def cmd_create(args: Namespace) -> int:
                 )
             )
         try:
-            dbg(f'Removing existing report "{output_dir_path}" directory')
+            log.dbg(f'Removing existing report "{output_dir_path}" directory')
             shutil.rmtree(output_dir_path)
         except Exception:
-            die(f'Cannot remove existing "{output_dir_path}" directory')
+            log.die(f'Cannot remove existing "{output_dir_path}" directory')
 
     # Get recipe files
     try:
         recipes = get_recipes(args)
     except Exception:
-        die('Unable to create list of recipe files')
+        log.die('Unable to create list of recipe files')
 
     # Validate recipes
     try:
         for recipe_file, recipe in recipes.items():
-            dbg(f'Validating recipe file "{recipe_file}"')
+            log.dbg(f'Validating recipe file "{recipe_file}"')
             validate_recipe(recipe)
     except Exception:
-        die(f'File "{recipe_file}" is not a valid diagnostic file')
+        log.die(f'File "{recipe_file}" is not a valid diagnostic file')
 
     # Get purge file
+    purge_path = args['purge']
     try:
         purge = get_purge(args)
     except Exception:
-        die(f'Unable to create purge for "{args.purge}"')
+        log.die(f'Unable to create purge for "{purge_path}"')
 
     # Validate purge file
     try:
         validate_purge(purge)
     except Exception:
-        die(f'File "{args.purge}" is not a valid purge file')
+        log.die(f'File "{purge_path}" is not a valid purge file')
 
     # Cook recipes
     try:
         for recipe_file, recipe in recipes.items():
             desc = recipe.get('description')
-            dbg(f'Processing recipe "{desc}" file "{recipe_file}"')
-            oprint(f'{desc}')
+            log.dbg(f'Processing recipe "{desc}" file "{recipe_file}"')
+            log.oprint(f'{desc}')
             process_recipe(recipe, args)
     except Exception:
-        die(f'Cannot process diagnostic file "{recipe_file}"')
+        log.die(f'Cannot process diagnostic file "{recipe_file}"')
 
-    dbg('Report is done.')
+    log.dbg('Report is done.')
 
     try:
         TMP_DIR_REPORT_PATH.mkdir(parents=True, exist_ok=True)
         shutil.copy(LOG_FILE_PATH, TMP_DIR_REPORT_PATH / 'diag.log')
     except Exception:
-        err('Cannot copy the log file to the report directory')
+        log.err('Cannot copy the log file to the report directory')
 
     try:
         redact_files(TMP_DIR_REPORT_PATH, TMP_DIR_REPORT_REDACTED_PATH, purge)
     except Exception:
-        err('The redaction was unsuccessful')
+        log.err('The redaction was unsuccessful')
 
     try:
         shutil.move(str(TMP_DIR_REPORT_REDACTED_PATH), str(output_dir_path))
     except Exception:
-        die(
+        log.die(
             (
                 f'Cannot move diagnostic report directory from '
                 f'"{TMP_DIR_REPORT_REDACTED_PATH}" to "{output_dir_path}"'
             )
         )
 
-    info(f'The report has been created in the "{output_dir_path}" directory.')
-    hint(
+    log.info(
+        f'The report has been created in the "{output_dir_path}" directory.'
+    )
+    log.hint(
         (
             f'Please make sure to thoroughly check it for any sensitive '
             f'information before sharing and remove files you do not want '
@@ -1517,199 +1293,233 @@ def cmd_create(args: Namespace) -> int:
     return 0
 
 
+def common_options(func):
+    """Attach the options shared by every subcommand."""
+    func = click.option(
+        '--no-hints',
+        is_flag=True,
+        help='Disable hint log messages.',
+    )(func)
+    func = click.option(
+        '--log-prefix',
+        is_flag=True,
+        help='Add a severity character at the beginning of log messages.',
+    )(func)
+    func = click.option(
+        '--force-terminal',
+        is_flag=True,
+        default=None,
+        help=(
+            'Enable terminal control codes even if out '
+            'is not attached to terminal.'
+        ),
+    )(func)
+    func = click.option(
+        '--no-color',
+        is_flag=True,
+        help='Do not emit ANSI color codes.',
+    )(func)
+    func = click.option(
+        '-d',
+        '--debug',
+        is_flag=True,
+        help='Print debug information, including exception tracebacks.',
+    )(func)
+    return func
+
+
+def _to_list(ctx, param, value):
+    """Click callback: normalize a ``multiple=True`` tuple to a list.
+
+    Keeps the value type identical to the old argparse ``append`` action that
+    the ``cmd_*`` functions were written against.
+    """
+    return list(value)
+
+
+def recipe_options(func):
+    """Attach the recipe-selection options (create/list/check)."""
+    func = click.option(
+        '-B',
+        '--build-dir',
+        metavar='PATH',
+        default=lambda: str(Path.cwd() / 'build'),
+        help='Build directory.',
+    )(func)
+    func = click.option(
+        '-P',
+        '--project-dir',
+        metavar='PATH',
+        default=lambda: str(Path.cwd()),
+        help='Project directory.',
+    )(func)
+    func = click.option(
+        '-a',
+        '--append',
+        is_flag=True,
+        help=(
+            'Use recipes specified with the -r/--recipe option in '
+            'combination with the built-in recipes.'
+        ),
+    )(func)
+    func = click.option(
+        '-t',
+        '--tag',
+        metavar='TAG',
+        multiple=True,
+        callback=_to_list,
+        help=(
+            'Consider only recipes containing TAG. This option can be '
+            'specified multiple times. By default, all recipes are '
+            'used. Use the list command to see recipe TAG information.'
+        ),
+    )(func)
+    func = click.option(
+        '-r',
+        '--recipe',
+        metavar='RECIPE',
+        multiple=True,
+        callback=_to_list,
+        help=(
+            f'Recipe to use. This option can be specified multiple times. '
+            f'By default, all built-in recipes from '
+            f'"{BUILTIN_RECIPES_PATH}" directory are used. RECIPE refers '
+            f'to the recipe file path or the file name stem for built-in '
+            f'recipes.'
+        ),
+    )(func)
+    return func
+
+
+def _run(func, **kwargs):
+    """Build the options dict and dispatch to a command function.
+
+    The ``cmd_*`` functions receive the collected rich_click options as a dict
+    carrying a ``func`` discriminator. (``--recipe`` / ``--tag`` already
+    normalize their ``multiple=True`` tuples to lists via the ``_to_list``
+    callback.)
+    """
+    args = {'func': func, **kwargs}
+    setup_logger(args)
+
+    if not os.environ.get('IDF_PATH'):
+        log.die(
+            (
+                'IDF_PATH is not set. This command must be '
+                'initiated from within an activated ESP-IDF environment.'
+            ),
+            show_hint=False,
+        )
+
+    return func(args)
+
+
+@click.group(
+    invoke_without_command=True,
+    context_settings=dict(help_option_names=['-h', '--help']),
+)
+@click.pass_context
+def cli(ctx):
+    """ESP-IDF diag tool"""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help(), err=True)
+        ctx.exit(1)
+
+
+@cli.command('create')
+@click.option(
+    '-p',
+    '--purge',
+    metavar='PATH',
+    default=str(BUILTIN_PURGE_PATH),
+    help=(
+        f'Purge file PATH containing a description of what information '
+        f'should be redacted from the resulting report. '
+        f'Default is "{BUILTIN_PURGE_PATH}"'
+    ),
+)
+@click.option(
+    '-f',
+    '--force',
+    is_flag=True,
+    help=(
+        'If the report directory already exists, remove it '
+        'before creating a new one.'
+    ),
+)
+@click.option(
+    '-o',
+    '--output',
+    metavar='PATH',
+    help=(
+        'Diagnostic report directory PATH. '
+        'If not specified, the diag-UUID is used as the report directory.'
+    ),
+)
+@click.option(
+    '--port',
+    type=SerialPortType(),
+    metavar='PORT',
+    help='Serial port device to be used by esptool tools.',
+)
+@recipe_options
+@common_options
+def create(**kwargs):
+    """Create diagnostic report."""
+    return _run(cmd_create, **kwargs)
+
+
+@cli.command('list')
+@recipe_options
+@common_options
+def list_(**kwargs):
+    """Show information about available recipes."""
+    return _run(cmd_list, **kwargs)
+
+
+@cli.command('check')
+@recipe_options
+@common_options
+def check(**kwargs):
+    """Validate recipes."""
+    return _run(cmd_check, **kwargs)
+
+
+@cli.command('zip')
+@click.argument('directory', metavar='PATH')
+@click.option(
+    '-f',
+    '--force',
+    is_flag=True,
+    help=(
+        'If the zip archive already exists, delete it before creating a '
+        'new one.'
+    ),
+)
+@click.option(
+    '-o',
+    '--output',
+    metavar='PATH',
+    help=(
+        'Zip file archive PATH. If not specified, the report directory '
+        'used as positional argument to the zip command with a zip '
+        'extension is used for the zip file archive.'
+    ),
+)
+@common_options
+def zip_(**kwargs):
+    """Create zip archive for diagnostic report in PATH."""
+    return _run(cmd_zip, **kwargs)
+
+
 def main() -> int:
-    def add_common_arguments(parser) -> None:
-        parser.add_argument(
-            '-d',
-            '--debug',
-            action='store_true',
-            help=('Print debug information, including exception tracebacks.'),
-        )
-        parser.add_argument(
-            '--no-color',
-            action='store_true',
-            help=('Do not emit ANSI color codes.'),
-        )
-        parser.add_argument(
-            '--force-terminal',
-            action='store_true',
-            default=None,
-            help=(
-                'Enable terminal control codes even if out '
-                'is not attached to terminal.'
-            ),
-        )
-        parser.add_argument(
-            '--log-prefix',
-            action='store_true',
-            help=(
-                'Add a severity character at the beginning of log messages.'
-            ),
-        )
-        parser.add_argument(
-            '--no-hints',
-            action='store_true',
-            help=('Disable hint log messages.'),
-        )
-
-    def add_recipe_arguments(parser) -> None:
-        parser.add_argument(
-            '-r',
-            '--recipe',
-            metavar='RECIPE',
-            action='append',
-            help=(
-                f'Recipe to use. This option can be specified multiple times. '
-                f'By default, all built-in recipes from '
-                f'"{BUILTIN_RECIPES_PATH}" directory are used. RECIPE refers '
-                f'to the recipe file path or the file name stem for built-in '
-                f'recipes.'
-            ),
-        )
-        parser.add_argument(
-            '-t',
-            '--tag',
-            metavar='TAG',
-            action='append',
-            help=(
-                'Consider only recipes containing TAG. This option can be '
-                'specified multiple times. By default, all recipes are '
-                'used. Use the list command to see recipe TAG information.'
-            ),
-        )
-        parser.add_argument(
-            '-a',
-            '--append',
-            action='store_true',
-            help=(
-                'Use recipes specified with the -r/--recipe option in '
-                'combination with the built-in recipes.'
-            ),
-        )
-        parser.add_argument(
-            '-P',
-            '--project-dir',
-            metavar='PATH',
-            default=str(Path.cwd()),
-            help=('Project directory.'),
-        )
-        parser.add_argument(
-            '-B',
-            '--build-dir',
-            metavar='PATH',
-            default=str(Path.cwd() / 'build'),
-            help=('Build directory.'),
-        )
-
-    parser = argparse.ArgumentParser(
-        prog='esp-idf-diag', description='ESP-IDF diag tool'
-    )
-    subparsers = parser.add_subparsers(help='sub-command help')
-
-    create_parser = subparsers.add_parser(
-        'create', help=('Create diagnostic report.')
-    )
-    create_parser.add_argument(
-        '-p',
-        '--purge',
-        metavar='PATH',
-        default=str(BUILTIN_PURGE_PATH),
-        help=(
-            f'Purge file PATH containing a description of what information '
-            f'should be redacted from the resulting report. '
-            f'Default is "{BUILTIN_PURGE_PATH}"'
-        ),
-    )
-    create_parser.add_argument(
-        '-f',
-        '--force',
-        action='store_true',
-        help=(
-            'If the report directory already exists, remove it '
-            'before creating a new one.'
-        ),
-    )
-    create_parser.add_argument(
-        '-o',
-        '--output',
-        metavar='PATH',
-        help=(
-            'Diagnostic report directory PATH. '
-            'If not specified, the diag-UUID is used as the report directory.'
-        ),
-    )
-    create_parser.add_argument(
-        '--port',
-        metavar='PORT',
-        help=('Serial port device to be used by esptool tools.'),
-    )
-    create_parser.set_defaults(func=cmd_create)
-    add_recipe_arguments(create_parser)
-    add_common_arguments(create_parser)
-
-    list_parser = subparsers.add_parser(
-        'list', help=('Show information about available recipes.')
-    )
-    list_parser.set_defaults(func=cmd_list)
-    add_recipe_arguments(list_parser)
-    add_common_arguments(list_parser)
-
-    check_parser = subparsers.add_parser('check', help=('Validate recipes.'))
-    check_parser.set_defaults(func=cmd_check)
-    add_recipe_arguments(check_parser)
-    add_common_arguments(check_parser)
-
-    zip_parser = subparsers.add_parser(
-        'zip', help=('Create zip archive for diagnostic report in PATH.')
-    )
-    zip_parser.add_argument(
-        'directory',
-        metavar='PATH',
-        help=('Directory PATH for which a zip archive should to be created.'),
-    )
-    zip_parser.add_argument(
-        '-f',
-        '--force',
-        action='store_true',
-        help=(
-            'If the zip archive already exists, delete it before creating a '
-            'new one.'
-        ),
-    )
-    zip_parser.add_argument(
-        '-o',
-        '--output',
-        metavar='PATH',
-        help=(
-            'Zip file archive PATH. If not specified, the report directory '
-            'used as positional argument to the zip command with a zip '
-            'extension is used for the zip file archive.'
-        ),
-    )
-
-    zip_parser.set_defaults(func=cmd_zip)
-    add_common_arguments(zip_parser)
-
     try:
-        args = parser.parse_args()
-        if 'func' not in args:
-            parser.print_help(sys.stderr)
-            sys.exit(1)
-
-        set_logger(args)
-
-        if not os.environ.get('IDF_PATH'):
-            die(
-                (
-                    'IDF_PATH is not set. This command must be '
-                    'initiated from within an activated ESP-IDF environment.'
-                ),
-                show_hint=False,
-            )
-
-        rv = args.func(args)
-    except KeyboardInterrupt:
-        die('Process interrupted by user.', show_hint=False)
+        rv = cli.main(prog_name='esp-idf-diag', standalone_mode=False)
+    except (KeyboardInterrupt, click.Abort):
+        log.die('Process interrupted by user.', show_hint=False)
+    except click.ClickException as e:
+        e.show()
+        sys.exit(e.exit_code)
 
     assert isinstance(rv, int)  # help mypy
     return rv
